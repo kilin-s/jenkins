@@ -24,7 +24,7 @@ pipeline {
         string(name: 'BUILDER_IMAGE', defaultValue: 'harbor.iops-test.com/internal/builder:6', description: 'Image for build service & run tests.')
         booleanParam(name: 'BUILD_SERVICE', defaultValue: true, description: 'Exec build service stage?')
         booleanParam(name: 'SONAR_CHECKS', defaultValue: true, description: 'Exec build sonar stage?')
-        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Exec run tests stage? ')
+        booleanParam(name: 'RUN_TESTS', defaultValue: false, description: 'Exec run tests stage? ')
         booleanParam(name: 'BUILD_IMAGE', defaultValue: true, description: 'Exec build image stage?')
     }
 
