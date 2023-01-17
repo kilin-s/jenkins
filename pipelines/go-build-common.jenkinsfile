@@ -1,0 +1,154 @@
+pipeline {
+    agent { label 'universal' }
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'GIT_REPO_URL', value: '$.repository.ssh_url'],
+                [key: 'GIT_REPO_BRANCH', value: '$.ref']
+            ],
+            causeString: 'Triggered on $ref',
+            tokenCredentialId: 'go-build-common-hook',
+            printContributedVariables: true,
+            printPostContent: false,
+            silentResponse: false,
+            shouldNotFlattern: false
+        )
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+    }
+
+    parameters { string(name: 'GIT_REPO_URL', defaultValue: '', description: 'Git repo ssh url to clone.')
+        string(name: 'GIT_REPO_BRANCH', defaultValue: '', description: 'Git repo branch name.')
+        string(name: 'BUILDER_IMAGE', defaultValue: 'harbor.iops-test.com/internal/builder:6', description: 'Image for build service & run tests.')
+        booleanParam(name: 'BUILD_SERVICE', defaultValue: true, description: 'Exec build service stage?')
+        booleanParam(name: 'SONAR_CHECKS', defaultValue: true, description: 'Exec build sonar stage?')
+        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Exec run tests stage? ')
+        booleanParam(name: 'BUILD_IMAGE', defaultValue: true, description: 'Exec build image stage?')
+    }
+
+    stages {
+        stage('Get sources') {
+            steps {
+                
+                println params.GIT_REPO_URL
+                cleanWs()
+                checkout([$class: 'GitSCM', branches: [[name: params.GIT_REPO_BRANCH]], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins-jenkins', url: params.GIT_REPO_URL]]])
+                
+                script {
+                gitRepoPath = params.GIT_REPO_URL.substring(params.GIT_REPO_URL.lastIndexOf(":") + 1)
+                sonarProject = gitRepoPath.minus(".git").minus("-").minus("_").minus("/")
+                sonarProjectName = gitRepoPath.minus(".git")
+                gitCommitHash = sh (script: "git log -n 1 --pretty=format:'%h'", returnStdout: true)
+                 
+                 
+                currentBuild.displayName = sonarProjectName + " " + params.GIT_REPO_BRANCH
+                currentBuild.description = sonarProjectName + " " + params.GIT_REPO_BRANCH + " " + gitCommitHash 
+                }
+
+            }
+        }
+
+        stage ('Run tests') {
+            when { 
+                environment name: 'RUN_TESTS',
+                value: 'true'
+                beforeAgent true
+            }
+            agent {
+                docker {
+                    image params.BUILDER_IMAGE
+                    args  '-v /home/jenkins/.cache:/home/jenkins/.cache '
+                    registryCredentialsId 'docker-registry'
+                    registryUrl "https://harbor.iops-test.com"
+                    reuseNode true
+                }
+            }
+            steps {
+                sh """
+                make test
+                """
+            }
+            
+            
+        }
+        
+        stage ('Run sonar checks') {
+            when { 
+                environment name: 'SONAR_CHECKS',
+                value: 'true'
+                beforeAgent true
+            }
+            agent {
+                docker {
+                    image 'sonarsource/sonar-scanner-cli'
+                    args  '--rm  '
+                    reuseNode true
+                }
+            }
+            steps{
+                script{ 
+                    withSonarQubeEnv('sonar-server') {
+
+                        sh """
+                        curl -u ${SONAR_AUTH_TOKEN}:  ${SONAR_HOST_URL}/api/projects/create -d 'project=${sonarProject}&name=${sonarProjectName}'
+                        /opt/sonar-scanner/bin/sonar-scanner \
+                        -Dsonar.projectKey=${sonarProject} \
+                        -Dsonar.sources=./
+                        """
+                    }
+                      
+                    timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                        def qg = waitForQualityGate() // Reuse taskId previously collected by withSonarQubeEnv
+                        if (qg.status != 'OK') {
+                            error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                        }
+                    }
+                }
+            }
+        }
+        
+        
+        stage ('build service') {
+            when { 
+                environment name: 'BUILD_SERVICE',
+                value: 'true'
+                beforeAgent true
+            }
+            agent {
+                docker {
+                    image params.BUILDER_IMAGE
+                    args  '-v /home/jenkins/.cache:/home/jenkins/.cache '
+                    registryCredentialsId 'docker-registry'
+                    registryUrl "https://harbor.iops-test.com"
+                    reuseNode true
+                }
+            }
+            steps {
+                sh """
+                make build
+                """
+            }
+        }
+        
+        stage ('build docker image') {
+            when { 
+                environment name: 'BUILD_IMAGE',
+                value: 'true'
+                beforeAgent true
+            }
+            steps {
+                script {
+                    docker.withRegistry('https://harbor.iops-test.com/', 'docker-registry') {
+                       sh """#!/bin/bash
+                       docker build -t harbor.iops-test.com/internal/sgapp:${gitCommitHash} . 
+                       docker push harbor.iops-test.com/internal/sgapp:${gitCommitHash}
+                       docker rmi harbor.iops-test.com/internal/sgapp:${gitCommitHash}
+                       """
+                    }
+                }
+            }
+        }
+    }
+}
