@@ -24,7 +24,7 @@ pipeline {
         string(name: 'BUILDER_IMAGE', defaultValue: 'harbor.iops-test.com/internal/builder:6', description: 'Image for build service & run tests.')
         booleanParam(name: 'BUILD_SERVICE', defaultValue: true, description: 'Exec build service stage?')
         booleanParam(name: 'SONAR_CHECKS', defaultValue: true, description: 'Exec build sonar stage?')
-        booleanParam(name: 'RUN_TESTS', defaultValue: false, description: 'Exec run tests stage? ')
+        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Exec run tests stage? ')
         booleanParam(name: 'BUILD_IMAGE', defaultValue: true, description: 'Exec build image stage?')
     }
 
@@ -32,21 +32,19 @@ pipeline {
         stage('Get sources') {
             steps {
                 
-                println params.GIT_REPO_URL
                 cleanWs()
                 checkout([$class: 'GitSCM', branches: [[name: params.GIT_REPO_BRANCH]], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins-jenkins', url: params.GIT_REPO_URL]]])
                 
                 script {
-                gitRepoPath = params.GIT_REPO_URL.substring(params.GIT_REPO_URL.lastIndexOf(":") + 1)
-                sonarProject = gitRepoPath.minus(".git").minus("-").minus("_").minus("/")
-                sonarProjectName = gitRepoPath.minus(".git")
-                gitCommitHash = sh (script: "git log -n 1 --pretty=format:'%h'", returnStdout: true)
+                    gitRepoPath = params.GIT_REPO_URL.substring(params.GIT_REPO_URL.lastIndexOf(":") + 1)
+                    sonarProject = gitRepoPath.minus(".git").minus("-").minus("_").minus("/")
+                    sonarProjectName = gitRepoPath.minus(".git")
+                    gitCommitHash = sh (script: "git log -n 1 --pretty=format:'%h'", returnStdout: true)
                  
                  
-                currentBuild.displayName = sonarProjectName + " " + params.GIT_REPO_BRANCH
-                currentBuild.description = sonarProjectName + " " + params.GIT_REPO_BRANCH + " " + gitCommitHash 
+                    currentBuild.displayName = sonarProjectName + " " + params.GIT_REPO_BRANCH
+                    currentBuild.description = sonarProjectName + " " + params.GIT_REPO_BRANCH + " " + gitCommitHash 
                 }
-
             }
         }
 
@@ -70,8 +68,6 @@ pipeline {
                 make test
                 """
             }
-            
-            
         }
         
         stage ('Run sonar checks') {
